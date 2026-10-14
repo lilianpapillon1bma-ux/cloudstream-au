@@ -1,0 +1,10 @@
+{
+  "name": "Mon dépôt Anime-Ultime",
+  
+  "description": "Extension Cloudstream pour Anime-Ultime",
+  "manifestVersion": 1,
+  "pluginLists": [
+    "https://raw.githubusercontent.com/lilianpapillon1bma-ux/cloudstream-au/builds/plugins.json"
+  ]
+
+}

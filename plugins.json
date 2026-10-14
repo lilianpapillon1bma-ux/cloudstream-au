@@ -1,0 +1,25 @@
+[
+    {
+        "iconUrl": "https://www.anime-ultime.net/favicon.ico",
+        "fileHash": "sha256-a2e2ebf60f8801b404b49b39665b560a01fa2906b044a6b4b9a0c82060f24480",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/lilianpapillon1bma-ux/cloudstream-au",
+        "fileSize": 14778,
+        "status": 1,
+        "language": "fr",
+        "authors": [
+            "toi"
+        ],
+        "tvTypes": [
+            "Anime",
+            "AnimeMovie",
+            "OVA",
+            "TvSeries"
+        ],
+        "version": 1,
+        "internalName": "AnimeUltime",
+        "description": "Anime-Ultime : animes, dramas et tokusatsu VOSTFR",
+        "url": "https://raw.githubusercontent.com/lilianpapillon1bma-ux/cloudstream-au/builds/AnimeUltime.cs3",
+        "name": "AnimeUltime"
+    }
+]
