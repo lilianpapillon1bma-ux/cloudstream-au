@@ -2,7 +2,8 @@ package com.animeultime
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import org.jsoup.nodes.Element
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 
 class AnimeUltimeProvider : MainAPI() {
     override var mainUrl = "[v5.anime-ultime.net](https://v5.anime-ultime.net)"
@@ -13,92 +14,88 @@ class AnimeUltimeProvider : MainAPI() {
 
     private val ua =
         "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) " +
-            "Chrome/124.0 Mobile Safari/537.36"
-    private val reqHeaders get() = mapOf("User-Agent" to ua, "Referer" to "$mainUrl/")
+                "Chrome/124.0.0.0 Mobile Safari/537.36"
 
-    // Le site liste ses catégories par lettre : series-0-1/<categorie>/<lettre>---
-    // "0" = "~" et "1" = "#" d'après les liens de la page.
-    private val letters = listOf("0", "1") + ('a'..'z').map { it.toString() }
-
-    override val mainPage = mainPageOf(
-        "$mainUrl/series-0-1/tokusatsu" to "Tokusatsu",
-        "$mainUrl/series-0-1/anime" to "Animes",
-        "$mainUrl/series-0-1/drama" to "Dramas",
+    override val requestHeaders: Map<String, String> = mapOf(
+        "User-Agent" to ua,
+        "Referer" to "$mainUrl/"
     )
 
-    // ---------- Utilitaires ----------
+    override val mainPage = mainPageOf(
+        "$mainUrl/Tokusatsu.html" to "Tokusatsu",
+        "$mainUrl/Anime.html" to "Animés",
+        "$mainUrl/Drama.html" to "Dramas",
+        "$mainUrl/OST.html" to "OST"
+    )
 
-    private fun String?.https() = this?.replace("http://", "https://")
+    private fun cleanTitle(t: String): String =
+        t.replace(Regex("\\s+(vostfr|vf|streaming)\\s*$", RegexOption.IGNORE_CASE), "").trim()
 
-    private fun String.cleanTitle() =
-        this.replace(Regex("\\s*vostfr\\s*$", RegexOption.IGNORE_CASE), "").trim()
+    private fun fixUrl(url: String): String =
+        when {
+            url.startsWith("http") -> url
+            url.startsWith("/") -> mainUrl + url
+            else -> "$mainUrl/$url"
+        }
 
-    // ---------- Page d'accueil (catalogue par lettre) ----------
+    // ---------- Page d'accueil ----------
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val letter = letters[(page - 1).coerceIn(0, letters.size - 1)]
-        val doc = app.get("${request.data}/$letter---", headers = reqHeaders).document
-        val items = doc.select("table.jtable tr").mapNotNull { it.toSearchResult() }
-        return newHomePageResponse(
-            "${request.name} (${if (letter == "0") "~" else if (letter == "1") "#" else letter.uppercase()})",
-            items,
-            hasNext = page < letters.size
-        )
-    }
-
-    private fun Element.toSearchResult(): SearchResponse? {
-        val a = selectFirst("td:nth-child(2) a[href*=file-0-1/]") ?: return null
-        val href = fixUrl(a.attr("href"))
-        val title = a.text().cleanTitle()
-        if (title.isBlank()) return null
-        val poster = selectFirst("td:nth-child(1) img")?.attr("data-href").https()
-        val kind = selectFirst("td:nth-child(3)")?.text()?.trim()
-        val type = if (kind.equals("Film", ignoreCase = true)) TvType.AnimeMovie else TvType.Anime
-        return newAnimeSearchResponse(title, href, type) {
-            this.posterUrl = poster
-        }
+        val doc = app.get(request.data, headers = requestHeaders).document
+        val items = doc.select("a[href*=streaming]")
+            .mapNotNull { a ->
+                val href = a.attr("href")
+                val title = a.text().ifBlank { a.attr("title") }
+                if (title.isBlank() || href.isBlank()) return@mapNotNull null
+                if (!href.contains("-streaming")) return@mapNotNull null
+                newAnimeSearchResponse(cleanTitle(title), fixUrl(href), TvType.Anime)
+            }
+            .distinctBy { it.url }
+        return newHomePageResponse(request, items)
     }
 
     // ---------- Recherche ----------
-    // La page de résultats n'a pas été vue : on récupère tous les liens vers des fiches.
 
     override suspend fun search(query: String): List<SearchResponse> {
         val doc = app.post(
             "$mainUrl/search-0-1",
             data = mapOf("search" to query),
-            headers = reqHeaders
+            headers = requestHeaders
         ).document
-        return doc.select("a[href*=file-0-1/]")
-            .filter { it.text().isNotBlank() }
-            .distinctBy { it.attr("href").substringBefore("-vostfr").substringAfterLast("/") }
-            .map {
-                newAnimeSearchResponse(it.text().cleanTitle(), fixUrl(it.attr("href")), TvType.Anime)
+        return doc.select("a[href*=streaming]")
+            .mapNotNull { a ->
+                val href = a.attr("href")
+                val title = a.text().ifBlank { a.attr("title") }
+                if (title.isBlank() || !href.contains("-streaming")) return@mapNotNull null
+                newAnimeSearchResponse(cleanTitle(title), fixUrl(href), TvType.Anime)
             }
+            .distinctBy { it.url }
     }
 
     // ---------- Fiche d'une série ----------
 
     override suspend fun load(url: String): LoadResponse {
-        val doc = app.get(url, headers = reqHeaders).document
+        val doc = app.get(url, headers = requestHeaders).document
 
-        val title = doc.selectFirst("h1")?.text()?.cleanTitle() ?: "Sans titre"
-        val poster = doc.selectFirst("div.principal_contain img")?.attr("src")?.let { fixUrl(it) }
-        val plot = doc.selectFirst("span[style*=FF00FF]")?.text()
-        val year = Regex("Ann.e\\s*:\\s*(\\d{4})").find(doc.text())?.groupValues?.get(1)?.toIntOrNull()
+        val title = doc.selectFirst("h1")?.text()?.let { cleanTitle(it) } ?: "Sans titre"
+        val poster = doc.selectFirst("img[src*=Affiche], img[src*=poster], div.principal_contain img")
+            ?.attr("src")?.let { fixUrl(it) }
+        val plot = doc.selectFirst("meta[name=description]")?.attr("content")
+            ?.substringAfter("Synopsis :")?.substringBeforeLast("-")?.trim()
+        val year = Regex("Ann.e\\s*:?\\s*(\\d{4})").find(doc.text())?.groupValues?.get(1)?.toIntOrNull()
         val serieId = doc.selectFirst("div.AUVideoPlayer")?.attr("data-serie").orEmpty()
 
-        val episodes = doc.select("table.jtable tr").mapNotNull { row ->
-            val link = row.selectFirst("a[href*=info-0-1/]") ?: return@mapNotNull null
-            val href = link.attr("href").substringBefore("#")
-            val epId = Regex("info-0-1/(\\d+)/").find(href)?.groupValues?.get(1)
+        val episodes = doc.select("ul.ficheDownload li.file").mapNotNull { li ->
+            val href = li.selectFirst("a")?.attr("href") ?: return@mapNotNull null
+            if (!href.contains("streaming")) return@mapNotNull null
+            val label = li.selectFirst("div.number label")?.text()?.trim()
+                ?: li.selectFirst("div.title")?.text()?.trim()
                 ?: return@mapNotNull null
-            val label = row.select("td").getOrNull(2)?.text()?.trim().orEmpty()
-            val number = Regex("(\\d+)(?:\\.\\d+)?\\s+vostfr", RegexOption.IGNORE_CASE)
-                .find(label)?.groupValues?.get(1)?.toIntOrNull()
-
-            newEpisode("$serieId|$epId") {
+            val number = Regex("(\\d+)").find(label)?.groupValues?.get(1)?.toIntOrNull()
+            newEpisode("$serieId|0") {
                 this.name = label
                 this.episode = number
+                this.dataUrl = fixUrl(href)
             }
         }
 
@@ -110,9 +107,24 @@ class AnimeUltimeProvider : MainAPI() {
         }
     }
 
-    // ---------- Liens vidéo (via playlist-<serie>.xml) ----------
+    // ---------- Liens vidéo (via VideoPlayer.html) ----------
 
-       // ---------- Liens vidéo (via VideoPlayer.html) ----------
+    private suspend fun fetchPlayer(serieId: String, fileId: String): String? {
+        val body = app.post(
+            "$mainUrl/VideoPlayer.html",
+            data = mapOf(
+                "idserie" to serieId,
+                "idfile" to fileId,
+                "focusFile" to "0",
+                "quality" to "1080p"
+            ),
+            headers = requestHeaders + mapOf(
+                "X-Requested-With" to "XMLHttpRequest",
+                "Origin" to mainUrl
+            )
+        ).text
+        return body.takeIf { it.contains("mp4") }
+    }
 
     override suspend fun loadLinks(
         data: String,
@@ -120,53 +132,29 @@ class AnimeUltimeProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        // "serieId|fileId" — fileId peut valoir "0" : on cherche alors l'épisode par sa page.
         val parts = data.split("|")
-        if (parts.size != 2) return false
-        val (serieId, epId) = parts
+        val serieId = parts.getOrNull(0).orEmpty()
+        val fileId = parts.getOrNull(1).orEmpty()
+        if (serieId.isBlank()) return false
 
-        val playerUrl = "$mainUrl/VideoPlayer.html"
-        val ajaxHeaders = reqHeaders + mapOf(
-            "X-Requested-With" to "XMLHttpRequest",
-            "Origin" to mainUrl
-        )
-
-        // 1) Playlist de la série (pour retrouver l'id du fichier si besoin)
-        val listBody = app.post(
-            playerUrl,
-            data = mapOf(
-                "idserie" to serieId,
-                "idfile" to "0",
-                "focusFile" to "0",
-                "quality" to "1080p"
-            ),
-            headers = ajaxHeaders
-        ).text
-
-        // 2) Vidéo de l'épisode demandé
-        val body = if (epId != "0") {
-            app.post(
-                playerUrl,
-                data = mapOf("idfile" to epId),
-                headers = ajaxHeaders
-            ).text
-        } else listBody
+        val body = if (fileId.isNotBlank() && fileId != "0") {
+            fetchPlayer(serieId, fileId)
+        } else {
+            null
+        } ?: return false
 
         val json = app.parseJson(body)
         val quality = json["quality"]?.asString ?: "1080p"
-        val mp4 = json[quality]?.asJsonObject?.get("mp4")?.asJsonObject
-        val url = mp4?.get("url")?.asString ?: return false
+        val url = json[quality]?.asJsonObject?.get("mp4")?.asJsonObject?.get("url")?.asString
+            ?: return false
 
         callback.invoke(
-            newExtractorLink(
-                this.name,
-                this.name,
-                url,
-                ExtractorLinkType.VIDEO
-            ) {
+            newExtractorLink(name, name, url, ExtractorLinkType.VIDEO) {
                 this.referer = "$mainUrl/"
                 this.quality = getQualityFromName(quality)
-                this.headers = reqHeaders
             }
         )
         return true
     }
+}
