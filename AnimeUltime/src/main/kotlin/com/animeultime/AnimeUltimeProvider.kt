@@ -142,10 +142,11 @@ class AnimeUltimeProvider : MainAPI() {
             fetchPlayer(serieId, fileId)
         } else {
             null
-        } ?: return false
+               val quality = Regex("\"quality\"\\s*:\\s*\"([^\"]+)\"").find(body)
+            ?.groupValues?.get(1) ?: "1080p"
+        val url = Regex("\"url\"\\s*:\\s*\"(https:[^\"]+)\"").find(body)
+            ?.groupValues?.get(1) ?: return false
 
-        val json = app.parseJson(body)
-        val quality = json["quality"]?.asString ?: "1080p"
         val url = json[quality]?.asJsonObject?.get("mp4")?.asJsonObject?.get("url")?.asString
             ?: return false
 
