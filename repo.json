@@ -3,6 +3,7 @@
   "description": "Extension Cloudstream pour Anime-Ultime",
   "manifestVersion": 1,
   "pluginLists": [
-    "https://raw.githubusercontent.com/TON_PSEUDO/TON_DEPOT/builds/plugins.json"
+    "https://raw.githubusercontent.com/lilianpapillon1bma-ux/cloudstream-au/builds/plugins.json"
   ]
+
 }
