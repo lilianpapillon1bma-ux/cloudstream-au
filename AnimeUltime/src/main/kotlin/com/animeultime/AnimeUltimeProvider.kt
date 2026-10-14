@@ -5,7 +5,7 @@ import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 
 class AnimeUltimeProvider : MainAPI() {
-    override var mainUrl = "https://www.anime-ultime.net"
+    override var mainUrl = "[v5.anime-ultime.net](https://v5.anime-ultime.net)"
     override var name = "Anime-Ultime"
     override var lang = "fr"
     override val hasMainPage = true
