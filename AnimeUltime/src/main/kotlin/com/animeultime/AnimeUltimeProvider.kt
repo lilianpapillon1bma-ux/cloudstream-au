@@ -112,6 +112,8 @@ class AnimeUltimeProvider : MainAPI() {
 
     // ---------- Liens vidéo (via playlist-<serie>.xml) ----------
 
+       // ---------- Liens vidéo (via VideoPlayer.html) ----------
+
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -122,31 +124,49 @@ class AnimeUltimeProvider : MainAPI() {
         if (parts.size != 2) return false
         val (serieId, epId) = parts
 
-        val xml = app.get("$mainUrl/playlist-$serieId.xml", headers = reqHeaders).text
+        val playerUrl = "$mainUrl/VideoPlayer.html"
+        val ajaxHeaders = reqHeaders + mapOf(
+            "X-Requested-With" to "XMLHttpRequest",
+            "Origin" to mainUrl
+        )
 
-        // L'identifiant de l'épisode est suivi des deux liens .mp4 de cet épisode.
-        val start = Regex("(?<![\\d/-])$epId(?!\\d)").find(xml)?.range?.last ?: return false
-        val urls = Regex("https?://[^\\s<\"']+\\.mp4")
-            .findAll(xml, start)
-            .map { it.value }
-            .take(2)
-            .distinct()
-            .toList()
+        // 1) Playlist de la série (pour retrouver l'id du fichier si besoin)
+        val listBody = app.post(
+            playerUrl,
+            data = mapOf(
+                "idserie" to serieId,
+                "idfile" to "0",
+                "focusFile" to "0",
+                "quality" to "1080p"
+            ),
+            headers = ajaxHeaders
+        ).text
 
-        urls.forEachIndexed { index, url ->
-            callback(
-                newExtractorLink(
-                    source = name,
-                    name = "$name - Source ${index + 1}",
-                    url = url,
-                    type = ExtractorLinkType.VIDEO
-                ) {
-                    this.referer = "$mainUrl/"
-                    this.quality = Qualities.Unknown.value
-                    this.headers = mapOf("User-Agent" to ua)
-                }
-            )
-        }
-        return urls.isNotEmpty()
+        // 2) Vidéo de l'épisode demandé
+        val body = if (epId != "0") {
+            app.post(
+                playerUrl,
+                data = mapOf("idfile" to epId),
+                headers = ajaxHeaders
+            ).text
+        } else listBody
+
+        val json = app.parseJson(body)
+        val quality = json["quality"]?.asString ?: "1080p"
+        val mp4 = json[quality]?.asJsonObject?.get("mp4")?.asJsonObject
+        val url = mp4?.get("url")?.asString ?: return false
+
+        callback.invoke(
+            newExtractorLink(
+                this.name,
+                this.name,
+                url,
+                ExtractorLinkType.VIDEO
+            ) {
+                this.referer = "$mainUrl/"
+                this.quality = getQualityFromName(quality)
+                this.headers = reqHeaders
+            }
+        )
+        return true
     }
-}
